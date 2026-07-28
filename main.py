@@ -32,10 +32,6 @@ from enum import Enum
 
 DEFAULT_SIMULATION_RADIUS = 16
 
-class EditMode(Enum):
-    SOURCE = 1
-    INITIAL_POLLUTION = 2
-
 class HeatmapCanvas(FigureCanvasQTAgg):
     radius_changed = pyqtSignal(int)
     chunk_clicked = pyqtSignal(int, int)
@@ -68,6 +64,56 @@ class HeatmapCanvas(FigureCanvasQTAgg):
 
         self.mpl_connect("scroll_event", self.on_scroll)
         self.mpl_connect("button_press_event", self.on_click)
+        self.mpl_connect("motion_notify_event", self.on_mouse_move)
+
+    def create_hover(self):
+        self.hover = self.ax.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(0, 0),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round", fc="white"),
+            zorder=1000,
+        )
+        self.hover.set_visible(False)
+
+    def on_mouse_move(self, event):
+        if event.inaxes != self.ax:
+            if self.hover.get_visible():
+                self.hover.set_visible(False)
+                self.draw_idle()
+            return
+
+        if event.xdata is None or event.ydata is None:
+            return
+
+        x = round(event.xdata)
+        y = round(event.ydata)
+
+        if x > self.map_radius:
+            offset = (-120, 15)
+        else:
+            offset = (15, 15)
+        self.hover.set_position(offset)
+
+        if not (0 <= x < self.map_size and 0 <= y < self.map_size):
+            if self.hover.get_visible():
+                self.hover.set_visible(False)
+                self.draw_idle()
+            return
+
+        if self.history is None:
+            return
+
+        value = self.history[self.current_frame, y, x]
+
+        self.hover.xy = (x, y)
+        self.hover.set_text(
+            f"Chunk : ({x}, {y})\nPollution : {value:,.0f}"
+        )
+        self.hover.set_visible(True)
+
+        self.draw_idle()
 
     def initialize(self):
         self.ax.clear()
@@ -98,6 +144,7 @@ class HeatmapCanvas(FigureCanvasQTAgg):
             self.image,
             ax=self.ax
         )
+        self.create_hover()
         self.draw()
 
     def set_view_radius(self, radius):
@@ -187,11 +234,19 @@ class HeatmapCanvas(FigureCanvasQTAgg):
 
     def on_click(self, event):
         if event.inaxes != self.ax:
+            self.selected_chunk = None
+            self.update_selection()
+            self.chunk_clicked.emit(-1, -1)
             return
         if event.xdata is None or event.ydata is None:
             return
         x = round(event.xdata)
         y = round(event.ydata)
+        if (self.selected_chunk == (x, y)):
+            self.selected_chunk = None
+            self.update_selection()
+            self.chunk_clicked.emit(-1, -1)
+            return
         self.selected_chunk = (x, y)
         self.update_selection()
         self.chunk_clicked.emit(x, y)
@@ -259,7 +314,6 @@ class MainWindow(QMainWindow):
         self.source_widgets = []
         self.initial_pollutions = []
         self.initial_pollution_widgets = []
-        # self.edit_mode = EditMode.SOURCE
 
         self.central = QWidget()
         self.setCentralWidget(self.central)
@@ -279,7 +333,7 @@ class MainWindow(QMainWindow):
 
         self.left_layout.addWidget(QLabel("Nombre de cycles"))
         self.nb_rounds = QSpinBox()
-        self.nb_rounds.setRange(1, 100_000)
+        self.nb_rounds.setRange(1, 100_000_000)
         self.nb_rounds.setValue(1000)
         self.left_layout.addWidget(self.nb_rounds)
 
